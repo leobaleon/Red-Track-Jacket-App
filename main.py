@@ -1,14 +1,85 @@
+# web scraping
 from selenium import webdriver
 from selenium.webdriver.support.ui import Select
 from bs4 import BeautifulSoup
-import time
 
-def main():
-    # UCI Schedule of Classes URL
-    url = "https://www.reg.uci.edu/perl/WebSoc/"
+# flask server
+from flask import Flask, request, Response, abort
+
+# twilio
+from twilio.rest import Client
+from twilio.request_validator import RequestValidator
+
+# misc
+import json, os, requests, time
+from functools import wraps
+
+# UCI Schedule of Classes URL
+url = "https://www.reg.uci.edu/perl/WebSoc/"
+
+# get Twilio credentials from environment variables
+account_sid = os.environ['ACCOUNT_SID']
+auth_token = os.environ['AUTH_TOKEN']
+
+# connect to Twilio API
+client = Client(account_sid, auth_token)
+
+def sendMessage(reply, to_):
+    message = client.messages \
+        .create(
+            from_='+18182908210',
+            to=to_,
+            body=reply
+        )
+    print(f"\"{reply}\" sent to {to_}")
+
+app = Flask(__name__)
+
+def validate_twilio_request(f):
+    """Validates that incoming requests genuinely originated from Twilio"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Create an instance of the RequestValidator class
+        validator = RequestValidator(auth_token)
+
+        # Validate the request using its URL, POST data,
+        # and X-TWILIO-SIGNATURE header
+        request_valid = validator.validate(
+            request.url,
+            request.form,
+            request.headers.get('X-TWILIO-SIGNATURE', ''))
+
+        # Continue processing the request if it's valid, return a 403 error if
+        # it's not
+        if request_valid:
+            return f(*args, **kwargs)
+        else:
+            return abort(403)
+    return decorated_function
+
+@app.route('/',  methods=['POST'])
+@validate_twilio_request
+def incoming_message():
+    # print(request.is_json)
+    # print(content)
+
+    content = request.get_json()
+    reply = getInfo(content['Body'])
+    sendMessage(reply, content['From'])
+
+    response = app.response_class(
+        response = json.dumps("Success!"),
+        status=200,
+        mimetype='application/json'
+    )
+
+    return response
+
+def getInfo(course):
+    # course = course.split()
 
     sample_dept = "CompSci"
-    sample_course_num = "122A"
+    sample_course_num = course
 
     # loads the driver executable
     driver = webdriver.Chrome('web_drivers/chromedriver.exe') 
@@ -19,7 +90,6 @@ def main():
     # choose a department and then hit the Display Web Results button
     drop_down = Select(driver.find_element_by_name("Dept"))
     drop_down.select_by_visible_text('COMPSCI . . . . Computer Science')
-    time.sleep(1)
 
     # click the text results button
     results_button = driver.find_element_by_css_selector('[value="Display Text Results"]')
@@ -71,11 +141,6 @@ def main():
         if status != "FULL":
             seats_available += int(max) - int(current)
         
-    print(f'Number of seats available in {sample_dept} {sample_course_num}: {seats_available}')
-
-    time.sleep(3)
-
     driver.quit()
 
-if __name__ == "__main__":
-    main()
+    return "Number of seats available in " + sample_dept + " " + sample_course_num + ": " + str(seats_available)
