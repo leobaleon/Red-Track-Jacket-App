@@ -4,15 +4,16 @@ from selenium.webdriver.support.ui import Select
 from bs4 import BeautifulSoup
 
 # flask server
-from flask import Flask, request, Response, abort
+from flask import Flask, request, abort
 
 # twilio
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 
 # misc
-import json, os, requests, time, threading, concurrent.futures
+import json, os, concurrent.futures
 from functools import wraps
+import department_list
 
 # UCI Schedule of Classes URL
 url = "https://www.reg.uci.edu/perl/WebSoc/"
@@ -59,7 +60,7 @@ def validate_twilio_request(f):
     return decorated_function
 
 # whenever an HTTP request is made to this server, it will get routed to this function,
-# but only after it has been validated by the validate_twilio_request() function
+# but only after it has been validated by the validate_twilio_request() function.
 # the incoming_message() function reads the data sent to this server, then parses it to
 # get the appropriate info needed to begin web scraping
 @app.route('/',  methods=['POST'])
@@ -69,7 +70,7 @@ def incoming_message() ->  dict:
     content = request.get_json()
 
     # begin a new thread and begin getting the requested info
-    future = concurrent.futures.ThreadPoolExecutor().submit(getInfo, content['Body'])
+    future = concurrent.futures.ThreadPoolExecutor().submit(get_info, content['Body'])
     reply = future.result()
 
     # reply with the corresponding info
@@ -83,13 +84,14 @@ def incoming_message() ->  dict:
 
     return response
 
-def get_actual_webpage_source(driver) -> dict:
+def get_actual_webpage_source(driver, drop_down_item) -> dict:
     # loads the website on Google Chrome
     driver.get(url)
 
     # choose a department and then hit the Display Web Results button
     drop_down = Select(driver.find_element_by_name("Dept"))
-    drop_down.select_by_visible_text('COMPSCI . . . . Computer Science')
+    drop_down.select_by_visible_text(drop_down_item) # ('COMPSCI . . . . Computer Science')
+    # print(drop_down_item)
 
     # click the text results button
     results_button = driver.find_element_by_css_selector('[value="Display Text Results"]')
@@ -98,8 +100,12 @@ def get_actual_webpage_source(driver) -> dict:
     return driver.page_source
 
 def get_lines_of_text(text, dept, course_num) -> str:
+    # text = text.upper()
+    # dept = dept.upper()
+    
     # find beginning of desired block
-    begin = text.find(dept + "  " + course_num)
+    print(dept + "  " + course_num)
+    begin = text.find(dept + "  " + course_num.upper())
 
     if begin == '-1':
         return begin
@@ -145,15 +151,56 @@ def get_seats(lines) -> int:
         
     return seats_available
 
-def getInfo(course_num) -> str:
-    dept = "CompSci"
+def get_dept(body):
+    # ex: ["Stats", "67"]
+    # splits the message received into separate parts
+    temp = body.split()
+
+    # ex: course_num = "67"
+    # the last part should be the course number
+    course_num = temp[-1]
+
+    # CHECK if course_num is not numeric 
+
+    # ex: index = 6
+    # find the index of where the course number begins for splitting
+    index = body.find(course_num)
+
+    # ex: dept = "Stats"
+    # everything before the course number should be the department name
+    dept = body[:index-1]
+
+    # ex: drop_down_item = ""
+    # access the dictionary to find the
+    drop_down_item = department_list.departments[dept.upper()]
+
+    print(dept)
+    dept = department_list.course_names[dept.upper()]
+    print(dept)
+
+    
+
+    result = []
+    result.append(dept)
+    result.append(course_num)
+    result.append(drop_down_item)
+
+    return result
+
+def get_info(body) -> str:
+    # parse the body of the text message received
+    parsed = get_dept(body)
+
+    dept = parsed[0]
+    course_num = parsed[1]
+    drop_down_item = parsed[2]
 
     # loads the driver executable
     driver = webdriver.Chrome('web_drivers/chromedriver.exe') 
 
     # perform the necessary webpage interactions to load the desired
     # text results of the appropriate courses
-    temp_html = get_actual_webpage_source(driver)
+    temp_html = get_actual_webpage_source(driver, drop_down_item)
 
     # close Chrome as soon as it's no longer needed
     driver.quit()
@@ -170,4 +217,4 @@ def getInfo(course_num) -> str:
     # get the total number of seats available for this course
     seats_available = get_seats(lines)
 
-    return "Number of seats available in " + dept + " " + course_num + ": " + str(seats_available)
+    return "Number of seats available in " + dept.rstrip() + " " + course_num.upper() + ": " + str(seats_available)
